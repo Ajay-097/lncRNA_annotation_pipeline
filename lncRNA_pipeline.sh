@@ -15,9 +15,19 @@
 # 3. reference genome (make sure there is no other fasta file in the run folder)
 # 4. Hexamer and logit files to run CPAT
 
+# Check if the required arguments are provided
+if [ "$#" -ne 2 ]; then
+  echo "Usage: $0 <name_of_reference_annotation_file> <name_of_ref_genome_file>"
+  exit 1
+fi
+
+# Assign the provided arguments to variables
+REF_GTF="$1"
+REF_GENOME="$2"
+
 # List all of the folders that needs to be processed for the lncRNA pipeline
 
-RUN_FOLDERS=('082-UU')
+RUN_FOLDERS=('Bisbetu')
 
 
 for FOLDER in ${RUN_FOLDERS[@]}; 
@@ -36,7 +46,7 @@ do
 
   OUTPUT_SUFFIX=$FOLDER
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Running StringTie"
-  stringtie ${BAM_FILES[@]} -G braker.gtf -o $OUTPUT_SUFFIX.stringtie_transcripts.gtf -p 12 -v 2> $OUTPUT_SUFFIX.stringtie_run.log
+  stringtie ${BAM_FILES[@]} -G $REF_GTF -o $OUTPUT_SUFFIX.stringtie_transcripts.gtf -p 12 -v 2> $OUTPUT_SUFFIX.stringtie_run.log
   
   # FEElnc run
   # Create a directory for the FEElnc run
@@ -50,20 +60,21 @@ do
   cd FEELnc_run
   
   # We need to extract only the transcripts from the reference annotation
-  awk '$3 == "exon" || $3 == "CDS"' ../braker.gtf > $OUTPUT_SUFFIX.reference_transcripts.gtf
+  # awk '$3 == "exon" || $3 == "CDS"' ../$REF_GTF > $OUTPUT_SUFFIX.reference_transcripts.gtf
   
   # Perform the FEELnc filter step
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Running FEELnc filter"
   FEELnc_filter.pl -i ../$OUTPUT_SUFFIX.stringtie_transcripts.gtf \
-  -a $OUTPUT_SUFFIX.reference_transcripts.gtf \
-  -b transcript_biotype=CDS -f 0.5 \
+  -a ../$REF_GTF \
+  -b transcript_biotype="protein_coding" \
   -o $OUTPUT_SUFFIX.stringtie_transcripts.feelncfilter.log > $OUTPUT_SUFFIX.FEELnc_filter_candidate_lncRNA.gtf
+  #  -f 0.2 
   
   # Run FEELnc_codpot step
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Running FEELnc codpot"
   FEELnc_codpot.pl -i $OUTPUT_SUFFIX.FEELnc_filter_candidate_lncRNA.gtf \
-  -a $OUTPUT_SUFFIX.reference_transcripts.gtf \
-  -g ../*.fasta --mode=shuffle 2> $OUTPUT_SUFFIX.feelnc_codpot.log
+  -a ../$REF_GTF \
+  -g ../$REF_GENOME --mode=shuffle 2> $OUTPUT_SUFFIX.feelnc_codpot.log
 
   conda deactivate
   
@@ -91,7 +102,7 @@ do
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Filtering reference overlapping transcripts"
   # Creating bed files with just the exon coordinates, make sure the 12th/10th column has transcript_id in stringtie and reference gtf
   awk '$3 == "exon" {print $1, $4, $5, $12}' OFS="\t" $OUTPUT_SUFFIX.transcripts_exon_filtered.gtf > $OUTPUT_SUFFIX.candidate_exons.bed
-  awk '$3 == "exon" {print $1, $4, $5, $10}' OFS="\t" ../../braker.gtf > $OUTPUT_SUFFIX.reference_exons.bed
+  awk '$3 == "exon" {print $1, $4, $5, $14}' OFS="\t" ../../$REF_GTF > $OUTPUT_SUFFIX.reference_exons.bed # USER INPUT required!
   
   bedtools intersect -v -a $OUTPUT_SUFFIX.candidate_exons.bed -b $OUTPUT_SUFFIX.reference_exons.bed | cut -f4 > transcripts_no_overlap.txt
   
@@ -104,7 +115,7 @@ do
   
   # Extracting the transcripts into a fasta file
   python /home/ae774/Projects/Tools/annotation_toolkit/run.py -f transcript \
-  -r ../../*.fasta $OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.gtf
+  -r ../../$REF_GENOME $OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.gtf
   
   cp Annotation_toolkit_outputs/transcript.fa ../$OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.fa
   
@@ -113,8 +124,8 @@ do
   # CPAT run
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Running CPAT"
   # We will need the hexamer and the logit files pre-bilt before running the pipeline
-  HEXAMER_FILE_PATH="/home/ae774/Projects/lncRNA/S.ratti/CPAT/sratti_hexamer.tsv"
-  LOGIT_FILE_PATH="/home/ae774/Projects/lncRNA/S.ratti/CPAT/sratti_logit.logit.RData"
+  HEXAMER_FILE_PATH="/home/ae774/Projects/lncRNA/moth_melanism/RNA_seq/Bisbetu/bisbetu_hexamer.tsv" # USER INPUT
+  LOGIT_FILE_PATH="/home/ae774/Projects/lncRNA/moth_melanism/RNA_seq/Bisbetu/bisbetu.logit.RData" # USER INPUT
   
   cpat -x $HEXAMER_FILE_PATH -d $LOGIT_FILE_PATH --top-orf=100  --antisense \
   -g $OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.fa \
