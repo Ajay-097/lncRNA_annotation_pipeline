@@ -6,13 +6,12 @@
 # CPAT
 # gffcompare
 # bedtools
-# Python dependencies - Bio, pandas, seaborn
-# HL annotation toolkit
+# gffread
 
 # This pipeline uses FEELnc tool and CPAT to annotate lncRNAs. We will need the following files as input
 # 1. BAM files generated from splice aware aligners (Hisat2 or Minimap)
 # 2. Reference annotation in .gtf format (make sure all annotation files have the same name across all folders)
-# 3. reference genome (make sure there is no other fasta file in the run folder)
+# 3. reference genome (make sure there is no other fasta file in the run folder and it has .fa suffix) 
 # 4. Hexamer and logit files to run CPAT
 
 # Check if the required arguments are provided
@@ -27,8 +26,7 @@ REF_GENOME="$2"
 
 # List all of the folders that needs to be processed for the lncRNA pipeline
 
-RUN_FOLDERS=('Bisbetu')
-
+RUN_FOLDERS=('Vanessa_Cardui') # USER INPUT!!
 
 for FOLDER in ${RUN_FOLDERS[@]}; 
 do
@@ -62,12 +60,13 @@ do
   # We need to extract only the transcripts from the reference annotation
   # awk '$3 == "exon" || $3 == "CDS"' ../$REF_GTF > $OUTPUT_SUFFIX.reference_transcripts.gtf
   
-  # Perform the FEELnc filter step
+  # Perform the FEELnc filter step 
+  # make sure that the transcript biotype is right USER INOUT REQUIRED!!!!!!
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Running FEELnc filter"
   FEELnc_filter.pl -i ../$OUTPUT_SUFFIX.stringtie_transcripts.gtf \
   -a ../$REF_GTF \
-  -b transcript_biotype="protein_coding" \
-  -o $OUTPUT_SUFFIX.stringtie_transcripts.feelncfilter.log > $OUTPUT_SUFFIX.FEELnc_filter_candidate_lncRNA.gtf
+  -o $OUTPUT_SUFFIX.stringtie_transcripts.feelncfilter.log > $OUTPUT_SUFFIX.FEELnc_filter_candidate_lncRNA.gtf \
+  -b transcript_biotype="mRNA" \
   #  -f 0.2 
   
   # Run FEELnc_codpot step
@@ -90,7 +89,7 @@ do
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Running Manual filtering step"
   
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Filtering mono-exonic transcripts"
-  # STEP 1 - Filtering out the mon0 exonic transcripts
+  # STEP 1 - Filtering out the mono exonic transcripts
   awk '$3=="exon"' ../../$OUTPUT_SUFFIX.stringtie_transcripts.gtf | \
   awk '{match($0, /transcript_id "([^"]+)"/, a); print a[1]}' | \
   sort | uniq -c | awk '$1 >=2 {print $2}' > more_than_2_exons.txt
@@ -101,31 +100,35 @@ do
   # STEP 2 - Filtering overlapping transcripts
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Filtering reference overlapping transcripts"
   # Creating bed files with just the exon coordinates, make sure the 12th/10th column has transcript_id in stringtie and reference gtf
-  awk '$3 == "exon" {print $1, $4, $5, $12}' OFS="\t" $OUTPUT_SUFFIX.transcripts_exon_filtered.gtf > $OUTPUT_SUFFIX.candidate_exons.bed
-  awk '$3 == "exon" {print $1, $4, $5, $14}' OFS="\t" ../../$REF_GTF > $OUTPUT_SUFFIX.reference_exons.bed # USER INPUT required!
+  awk '$3 == "exon" {print $1, $4, $5, $12, $7}' OFS="\t" $OUTPUT_SUFFIX.transcripts_exon_filtered.gtf > $OUTPUT_SUFFIX.candidate_exons.bed
+  # We need to extract only the exons that have transcript_biotype as Protein coding
+  awk '$3 == "exon" && $0 ~ /transcript_biotype "protein_coding"/ {print $1, $4, $5, $12, $7}' OFS="\t" ../../$REF_GTF > $OUTPUT_SUFFIX.reference_exons.bed # USER INPUT required!
+#  awk '$3 == "exon" {print $1, $4, $5, $10, $7}' OFS="\t" ../../$REF_GTF > $OUTPUT_SUFFIX.reference_exons.bed # USER INPUT required!
   
-  bedtools intersect -v -a $OUTPUT_SUFFIX.candidate_exons.bed -b $OUTPUT_SUFFIX.reference_exons.bed | cut -f4 > transcripts_no_overlap.txt
+  bedtools intersect -a $OUTPUT_SUFFIX.candidate_exons.bed -b $OUTPUT_SUFFIX.reference_exons.bed -wa -f 0.1 | cut -f4 > overlapping_transcripts.txt # Minimum overlap of 10% is allowed 
   
-  awk '{match($0, /"([^"]+)"/, a); print a[1]}' transcripts_no_overlap.txt| sort | uniq > temp.txt
-  rm transcripts_no_overlap.txt
-  mv temp.txt transcripts_no_overlap.txt
+  awk '{match($0, /"([^"]+)"/, a); print a[1]}' overlapping_transcripts.txt | sort | uniq > temp.txt
+  rm overlapping_transcripts.txt
+  mv temp.txt overlapping_transcripts.txt
   
-  grep -F -w -f <(sed 's/^/transcript_id "/; s/$/";/' transcripts_no_overlap.txt) \
+  grep -F -v -f <(sed 's/^/transcript_id "/; s/$/";/' overlapping_transcripts.txt) \
   $OUTPUT_SUFFIX.transcripts_exon_filtered.gtf > $OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.gtf
   
   # Extracting the transcripts into a fasta file
-  python /home/ae774/Projects/Tools/annotation_toolkit/run.py -f transcript \
-  -r ../../$REF_GENOME $OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.gtf
+  # python /home/ae774/Projects/Tools/annotation_toolkit/run.py -f transcript \
+  # -r ../../$REF_GENOME $OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.gtf
   
-  cp Annotation_toolkit_outputs/transcript.fa ../$OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.fa
+  gffread -w ../$OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.fa -g ../../$REF_GENOME \
+  $OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.gtf
   
   cd ..
   
   # CPAT run
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] Running CPAT"
   # We will need the hexamer and the logit files pre-bilt before running the pipeline
-  HEXAMER_FILE_PATH="/home/ae774/Projects/lncRNA/moth_melanism/RNA_seq/Bisbetu/bisbetu_hexamer.tsv" # USER INPUT
-  LOGIT_FILE_PATH="/home/ae774/Projects/lncRNA/moth_melanism/RNA_seq/Bisbetu/bisbetu.logit.RData" # USER INPUT
+  # Make sure that the hexamer and the logit files have the suffix '_hexamer.tsv' and '.logit.RData'
+  HEXAMER_FILE_PATH='../*_hexamer.tsv' 
+  LOGIT_FILE_PATH='../*.logit.RData' 
   
   cpat -x $HEXAMER_FILE_PATH -d $LOGIT_FILE_PATH --top-orf=100  --antisense \
   -g $OUTPUT_SUFFIX.manual_filtered_candidate_lncrna.fa \
